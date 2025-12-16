@@ -1,0 +1,319 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Cấu hình toàn hệ thống (Admin Settings)
+model SystemConfig {
+  id              String  @id @default("global_config") // Chỉ có 1 record
+  defaultModelId  String  @default("gemini-3.0-pro")    // Model mặc định
+  apiKey          String? // (Optional) Nếu muốn nhập key từ UI thay vì ENV
+  minVideoDuration Int    @default(600) // Thời lượng video tối thiểu (giây)
+  avgSceneDuration Int    @default(8)   // Độ dài trung bình Scene (giây)
+  speechRate      Float   @default(2.5) // Tốc độ nói (từ/giây) - Average speaking rate
+  maxWordsPerScene Int    @default(20)  // Số từ tối đa mỗi scene (8s * 2.5 từ/s = 20 từ)
+  veo3Template    String  @default("[STYLE] of [CHARACTER] doing [ACTION], [BG], [LIGHTING]")
+  
+  // Channel/Persona Settings (moved from Channel model)
+  channelName     String  @default("My Channel")
+  language        String  @default("Vietnamese") // Ngôn ngữ chính của video
+  personaSettings String  @default("{}")  // JSON: { "character": "...", "tone": "...", "style": "..." }
+  
+  // AI Prompts - Editable by user
+  outlinePrompt   String  @default("")  // System instruction + prompt for outline generation
+  scriptsPrompt   String  @default("")  // System instruction + prompt for scripts generation
+  veo3Prompt      String  @default("")  // System instruction + prompt for VEO3 prompts generation
+  characterPrompt String  @default("")  // Prompt for character visual description
+  backgroundPrompt String @default("")  // Prompt for background visual description
+  itemsPrompt     String  @default("")  // Prompt for items visual description
+  
+  // Model Rotation Settings - JSON array of model configs with priority order
+  modelRotation   String  @default("[]")  // [{ id, name, rpm, tpm, rpd, priority }]
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// AI Model Configuration for rotation system
+model AIModel {
+  id          String   @id @default(cuid())
+  modelId     String   // e.g., "gemini-1.5-flash-002"
+  displayName String   // e.g., "Gemini 1.5 Flash"
+  apiKey      String?  // Optional dedicated API key for this model
+  rpm         Int      // Requests per minute
+  tpm         Int      // Tokens per minute
+  rpd         Int      // Requests per day
+  priority    Int      @default(999) // Lower number = higher priority
+  enabled     Boolean  @default(true)
+  
+  // User ownership - NULL means default/system model
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Current usage tracking (resets daily/minute)
+  currentMinuteRequests Int @default(0)
+  currentMinuteTokens   Int @default(0)
+  currentDayRequests    Int @default(0)
+  lastResetMinute       DateTime?
+  lastResetDay          DateTime?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  apiCalls    AIAPICall[]
+  
+  @@unique([modelId, userId])
+  @@index([priority, enabled])
+  @@index([userId])
+}
+
+// AI API Call logging for dashboard
+model AIAPICall {
+  id              String   @id @default(cuid())
+  modelId         String?  // Which AI model was used (optional if model deleted)
+  model           AIModel? @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  
+  // Request info
+  operation       String   // e.g., "GENERATE_OUTLINE", "GENERATE_SCRIPT", "GENERATE_VEO3"
+  projectId       String?  // Link to project if applicable
+  userId          String?  // Link to user if applicable
+  
+  // Timing
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+  durationMs      Int?     // Milliseconds
+  
+  // Token usage
+  inputTokens     Int      @default(0)
+  outputTokens    Int      @default(0)
+  totalTokens     Int      @default(0)
+  
+  // Request/Response
+  promptPreview   String?  // First 500 chars of prompt
+  responsePreview String?  // First 500 chars of response
+  
+  // Status
+  status          String   @default("PENDING") // PENDING, SUCCESS, FAILED
+  error           String?  // Error message if failed
+  
+  // Cost estimation (optional)
+  estimatedCost   Float?   // USD
+  
+  createdAt       DateTime @default(now())
+  
+  @@index([modelId, startedAt])
+  @@index([operation, startedAt])
+  @@index([projectId, startedAt])
+  @@index([status, startedAt])
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  channels      Channel[]
+  aiModels      AIModel[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+ 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+ 
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+ 
+  @@id([provider, providerAccountId])
+}
+ 
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+ 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+ 
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+ 
+  @@id([identifier, token])
+}
+
+model Channel {
+  id              String    @id @default(cuid())
+  name            String
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // YouTube integration
+  youtubeChannelId String?  @unique // YouTube Channel ID
+  youtubeThumbnail String?           // YouTube Channel thumbnail URL
+  
+  // JSON: { "character_desc": "...", "tone": "...", "style": "..." }
+  personaSettings String    @default("{}")
+  
+  // Default prompt for generating outlines
+  defaultOutlinePrompt String @default("")
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  projects        Project[]
+  
+  @@index([userId])
+  @@index([youtubeChannelId])
+}
+
+model Project {
+  id            String   @id @default(cuid())
+  title         String
+  inputContent  String   // Text input
+  
+  // New project settings
+  videoRatio    String   @default("16:9") // Video aspect ratio
+  styleStorytelling String @default("") // Style of storytelling
+  mainCharacterDesc String @default("") // Main character description
+  visualStyle   String   @default("") // Visual style for video generation
+  
+  // Trạng thái: DRAFT, OUTLINE_GENERATED, SCRIPT_GENERATED, COMPLETED
+  status        String   @default("DRAFT")
+
+  // Output từ Gemini (JSON String) - Deprecated, dùng relations
+  outlineData   String   @default("{}")
+  fullScript    String   @default("[]")
+
+  // Character visual description (editable)
+  characterVisual String  @default("")
+  characterVisualVi String @default("") // Vietnamese translation
+  
+  // Background description (editable)  
+  backgroundVisual String @default("")
+  backgroundVisualVi String @default("") // Vietnamese translation
+  
+  // Visual style guide (JSON String)
+  visualStyleGuide String @default("{}")
+
+  channelId     String
+  channel       Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  
+  // Relations
+  chapters      Chapter[]
+  items         ProjectItem[]
+  tasks         Task[]
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([channelId])
+  @@index([status])
+}
+
+model Chapter {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  chapterNumber   Int      // Thứ tự chapter (1, 2, 3...)
+  title           String
+  title_vi        String   @default("")  // Vietnamese translation
+  goal            String   @default("")  // Mục tiêu của chapter
+  contentSummary  String   // Mô tả nội dung chapter (key points)
+  contentSummary_vi String @default("")  // Vietnamese translation
+  durationSeconds Int      // Thời lượng dự kiến
+  
+  // Relations
+  scenes          Scene[]
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([projectId])
+  @@unique([projectId, chapterNumber])
+}
+
+model Scene {
+  id              String   @id @default(cuid())
+  chapterId       String
+  chapter         Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  
+  sceneNumber     String   // Scene identifier (e.g., "2_1" for chapter 2, scene 1)
+  durationSeconds Int      // Thời lượng scene
+  voiceover       String   // Text voiceover
+  voiceover_vi    String   @default("") // Vietnamese translation
+  visualDesc      String   // Mô tả visual
+  visualDesc_vi   String   @default("") // Vietnamese translation
+  veo3Prompt      String   @default("")  // VEO3 prompt đã generate
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([chapterId])
+  @@unique([chapterId, sceneNumber])
+}
+
+model ProjectItem {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  name        String   // Tên item/đồ vật
+  description String   // Mô tả
+  context     String   // Ngữ cảnh xuất hiện
+  visualDesc  String   @default("")  // Mô tả visual chi tiết (có thể edit)
+  visualDescVi String  @default("")  // Vietnamese translation
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([projectId])
+}
+
+model Task {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  type        String    // GENERATE_OUTLINE, GENERATE_SCRIPTS, GENERATE_VEO3_PROMPTS, etc.
+  status      String    @default("PENDING") // PENDING, RUNNING, COMPLETED, FAILED
+  progress    Int       @default(0) // 0-100
+  message     String    @default("")
+  result      String?   // JSON result data
+  error       String?
+  
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  @@index([projectId])
+  @@index([status])
+  @@index([type])
+}
+
