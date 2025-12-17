@@ -50,12 +50,41 @@ export async function linkYouTubeChannel(
 
 export async function getYouTubeChannels() {
     try {
-        const response = await fetch('/api/youtube/channels');
-        if (!response.ok) {
-            throw new Error('Failed to fetch YouTube channels');
+        const session = await auth();
+        if (!session?.user?.id) {
+            return { success: false, error: "Unauthorized", channels: [] };
         }
+
+        // @ts-ignore
+        const accessToken = session.accessToken as string | undefined;
+        if (!accessToken) {
+            return { success: false, error: "No access token available", channels: [] };
+        }
+
+        const response = await fetch(
+            'https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails&mine=true',
+            {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                },
+            }
+        );
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || 'Failed to fetch YouTube channels');
+        }
+
         const data = await response.json();
-        return { success: true, channels: data.channels };
+        const channels = data.items?.map((item: any) => ({
+            id: item.id,
+            title: item.snippet.title,
+            description: item.snippet.description,
+            thumbnail: item.snippet.thumbnails.default.url,
+            customUrl: item.snippet.customUrl,
+        })) || [];
+
+        return { success: true, channels };
     } catch (error: any) {
         console.error("Error getting YouTube channels:", error);
         return { success: false, error: error.message, channels: [] };

@@ -48,7 +48,7 @@ GOOGLE_API_KEY="your_google_api_key_here"
 AUTH_SECRET="generate-with-openssl-or-crypto"
 AUTH_GOOGLE_ID="your_google_oauth_client_id"
 AUTH_GOOGLE_SECRET="your_google_oauth_client_secret"
-NEXTAUTH_URL="http://localhost:3000"
+NEXTAUTH_URL="http://localhost:6789"
 \`\`\`
 
 **Get your Google API Key:**
@@ -84,7 +84,7 @@ npm start
 ## 📖 Usage
 
 ### 0. Sign In
-Visit http://localhost:3000 and sign in with your Google account.
+Visit http://localhost:6789 and sign in with your Google account.
 
 ### 1. Configure System Settings
 Navigate to `/dashboard/settings` to:
